@@ -1,0 +1,109 @@
+services:
+  backend-api:
+    build:
+      context: .
+      dockerfile: ./apps/backend-api/Dockerfile
+    container_name: backend-api
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_started
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - ./apps/backend-api:/usr/src/app/apps/backend-api
+      - ./packages:/usr/src/app/packages
+      - ./pnpm-workspace.yaml:/usr/src/app/pnpm-workspace.yaml:ro
+      - ./package.json:/usr/src/app/package.json:ro
+      - ./pnpm-lock.yaml:/usr/src/app/pnpm-lock.yaml:ro
+      - /usr/src/app/node_modules
+    # command:
+    #   ["sh", "-c", "/usr/src/app/apps/backend-api/scripts/wait-and-migrate.sh"]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+    container_name: frontend
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    depends_on:
+      - backend-api
+    volumes:
+      - ./apps/web:/usr/src/app/apps/web
+      - ./packages:/usr/src/app/packages
+      - ./pnpm-workspace.yaml:/usr/src/app/pnpm-workspace.yaml:ro
+      - /usr/src/app/node_modules
+    command: pnpm --filter web dev --port 3001
+
+  timescaledb:
+    image: timescale/timescaledb:2.16.1-pg16
+    container_name: timescaledb
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: trading
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./db/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trading"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+
+  kafka:
+    image: bitnami/kafka:3.6
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,PLAINTEXT_HOST://:29092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+    depends_on:
+      - zookeeper
+    networks:
+      - app-network
+
+  zookeeper:
+    image: bitnami/zookeeper:3.9
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    networks:
+      - app-network
+
+volumes:
+  redis-data:
+  timescaledb-data:
+
+networks:
+  app-network:
+    driver: bridge
